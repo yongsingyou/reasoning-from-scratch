@@ -11,20 +11,20 @@ import torch
 
 from reasoning_from_scratch.ch02 import get_device
 from reasoning_from_scratch.ch03 import (
+    eta_progress_message,
     evaluate_math500_stream,
-    render_prompt,
     extract_final_candidate,
     grade_answer,
-    eta_progress_message,
-    load_model_and_tokenizer,
     load_math500_test,
+    load_model_and_tokenizer,
     load_tokenizer_only,
+    render_prompt,
 )
 from reasoning_from_scratch.ch04 import top_p_filter
 from reasoning_from_scratch.ch06 import (
     load_math_train,
 )
-from reasoning_from_scratch.qwen3 import KVCache, Qwen3Model, QWEN_CONFIG_06_B
+from reasoning_from_scratch.qwen3 import QWEN_CONFIG_06_B, KVCache, Qwen3Model
 
 SCRIPT_NAME = Path(__file__).stem
 LOG_PATH = Path(__file__).parent / "logs" / f"{SCRIPT_NAME}_outputs.txt"
@@ -60,10 +60,7 @@ def sample_response(
     temperature=0.8,
     top_p=0.9,
 ):
-    input_ids = torch.tensor(
-        tokenizer.encode(prompt),
-        device=device
-        )
+    input_ids = torch.tensor(tokenizer.encode(prompt), device=device)
 
     cache = KVCache(n_layers=model.cfg["n_layers"])
     model.reset_kv_cache()
@@ -89,8 +86,10 @@ def sample_response(
         logits = model(next_token, cache=cache)[:, -1]
 
     full_token_ids = torch.cat(
-        [input_ids,
-         torch.tensor(generated, device=device, dtype=input_ids.dtype),]
+        [
+            input_ids,
+            torch.tensor(generated, device=device, dtype=input_ids.dtype),
+        ]
     )
     return full_token_ids, input_ids.numel(), tokenizer.decode(generated)
 
@@ -103,18 +102,24 @@ def sequence_logprob_and_entropy(model, token_ids, prompt_len):
     selected = logprobs[:-1].gather(1, targets.unsqueeze(-1)).squeeze(-1)
 
     # Log-prob of the generated answer tokens (sum over answer steps)
-    selected_answer_logprobs = selected[prompt_len - 1:]
+    selected_answer_logprobs = selected[prompt_len - 1 :]
     logp_all_steps = torch.sum(selected_answer_logprobs)
 
     # Entropy over the full vocab distribution at each answer step
-    all_answer_logprobs = logprobs[:-1][prompt_len - 1:]
-    if all_answer_logprobs.numel() == 0:  # Safeguard if the model immediately emits EOS token
+    all_answer_logprobs = logprobs[:-1][prompt_len - 1 :]
+    if (
+        all_answer_logprobs.numel() == 0
+    ):  # Safeguard if the model immediately emits EOS token
         entropy_all_steps = logp_all_steps.new_tensor(0.0)
     else:
         all_answer_probs = torch.exp(all_answer_logprobs)
-        plogp = all_answer_probs * all_answer_logprobs    # elementwise p * log p
-        step_entropy = -torch.sum(plogp, dim=-1)          # sum over vocab -> entropy per step
-        entropy_all_steps = torch.mean(step_entropy)      # average over answer steps
+        plogp = all_answer_probs * all_answer_logprobs  # elementwise p * log p
+        step_entropy = -torch.sum(
+            plogp, dim=-1
+        )  # sum over vocab -> entropy per step
+        entropy_all_steps = torch.mean(
+            step_entropy
+        )  # average over answer steps
 
     return logp_all_steps, entropy_all_steps
 
@@ -125,12 +130,13 @@ def sequence_logprob(model, token_ids, prompt_len):
 
     targets = token_ids[1:]
     selected = logprobs[:-1].gather(1, targets.unsqueeze(-1)).squeeze(-1)
-    return selected[prompt_len - 1:].sum()
+    return selected[prompt_len - 1 :].sum()
 
 
 def reward_rlvr(answer_text, ground_truth):
     extracted = extract_final_candidate(
-        answer_text, fallback=None  # Require \boxed{}
+        answer_text,
+        fallback=None,  # Require \boxed{}
     )
     if not extracted:
         return 0.0
@@ -165,14 +171,27 @@ def compute_grpo_loss_plus_format_reward(
     skip_zero_adv=False,
 ):
     if kl_coeff and ref_model is None:
-        raise ValueError("ref_model must be provided when kl_coeff is non-zero.")
+        raise ValueError(
+            "ref_model must be provided when kl_coeff is non-zero."
+        )
     if old_model is None:
         old_model = model
     # old_model and ref_model may be on a different device (e.g. cuda:1) to save GPU 0 memory
-    old_device = next(old_model.parameters()).device if old_model is not model else device
+    old_device = (
+        next(old_model.parameters()).device
+        if old_model is not model
+        else device
+    )
     if offload_device is None:
         offload_device = old_device
-    roll_old_logps, roll_ref_logps, roll_rewards, roll_format_rewards, roll_entropies, samples = [], [], [], [], [], []
+    (
+        roll_old_logps,
+        roll_ref_logps,
+        roll_rewards,
+        roll_format_rewards,
+        roll_entropies,
+        samples,
+    ) = [], [], [], [], [], []
     roll_token_ids, roll_prompt_lens = [], []
     prompt = render_prompt(example["problem"])
 
@@ -191,9 +210,13 @@ def compute_grpo_loss_plus_format_reward(
             top_p=top_p,
         )
         with torch.no_grad():
-            old_logp, entropy = sequence_logprob_and_entropy(old_model, token_ids, prompt_len)
+            old_logp, entropy = sequence_logprob_and_entropy(
+                old_model, token_ids, prompt_len
+            )
             if kl_coeff:
-                ref_logp = sequence_logprob(ref_model, token_ids.to(offload_device), prompt_len)
+                ref_logp = sequence_logprob(
+                    ref_model, token_ids.to(offload_device), prompt_len
+                )
             else:
                 ref_logp = None
         rlvr_reward = reward_rlvr(text, example["answer"])
@@ -247,45 +270,62 @@ def compute_grpo_loss_plus_format_reward(
             "loss_tensor": None,
         }
 
-    new_logps = []
-    for token_ids, prompt_len in zip(roll_token_ids, roll_prompt_lens):
+    # Accumulate gradients one rollout at a time to avoid holding all
+    # computation graphs simultaneously (the main OOM cause on T4).
+    # Each iteration: forward → per-sample loss → backward → free graph.
+    n = len(roll_token_ids)
+    total_loss = 0.0
+    total_pg_loss = 0.0
+    total_kl_loss = 0.0
+    ratio_vals = []
+
+    for i, (token_ids, prompt_len) in enumerate(
+        zip(roll_token_ids, roll_prompt_lens)
+    ):
         new_logp = sequence_logprob(model, token_ids.to(device), prompt_len)
-        new_logps.append(new_logp)
-    new_logps = torch.stack(new_logps)
+        old_logp = roll_old_logps[i].detach().to(device)
 
-    old_logps = torch.stack(roll_old_logps).detach().to(device)
-    log_ratio = new_logps - old_logps
-    ratio = torch.exp(log_ratio)
-    clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
+        log_ratio = new_logp - old_logp
+        ratio_i = torch.exp(log_ratio)
+        clipped_ratio_i = torch.clamp(ratio_i, 1.0 - clip_eps, 1.0 + clip_eps)
+        a = adv[i]
 
-    unclipped = ratio * adv
-    clipped = clipped_ratio * adv
-    obj = torch.where(
-        adv >= 0,
-        torch.minimum(unclipped, clipped),
-        torch.maximum(unclipped, clipped),
-    )
+        unclipped_i = ratio_i * a
+        clipped_i = clipped_ratio_i * a
+        obj_i = torch.where(
+            a >= 0,
+            torch.minimum(unclipped_i, clipped_i),
+            torch.maximum(unclipped_i, clipped_i),
+        )
+        pg_i = -obj_i
 
-    pg_loss = -obj.mean()
-    if kl_coeff:
-        ref_logps = torch.stack(roll_ref_logps).detach().to(device)
-        kl_loss = kl_coeff * torch.mean(new_logps - ref_logps)
-    else:
-        kl_loss = torch.tensor(0.0, device=new_logps.device)
-    loss = pg_loss + kl_loss
+        if kl_coeff:
+            ref_logp = roll_ref_logps[i].detach().to(device)
+            kl_i = kl_coeff * (new_logp - ref_logp)
+        else:
+            kl_i = torch.tensor(0.0, device=device)
 
+        step_loss = (pg_i + kl_i) / n  # divide by n so sum == mean
+        step_loss.backward()  # frees this rollout's graph immediately
+
+        total_loss += step_loss.item()
+        total_pg_loss += pg_i.item() / n
+        total_kl_loss += kl_i.item() / n
+        ratio_vals.append(ratio_i.detach())
+
+    ratio_mean = torch.stack(ratio_vals).mean().item()
     return {
-        "loss": loss.item(),
-        "pg_loss": pg_loss.item(),
-        "kl_loss": kl_loss.item(),
-        "policy_ratio": ratio.mean().item(),
+        "loss": total_loss,
+        "pg_loss": total_pg_loss,
+        "kl_loss": total_kl_loss,
+        "policy_ratio": ratio_mean,
         "rewards": roll_rewards,
         "format_rewards": roll_format_rewards,
         "entropies": roll_entropies,
         "advantages": advantages.detach().cpu().tolist(),
         "is_zero_adv": is_zero_adv,
         "samples": samples,
-        "loss_tensor": loss,
+        "loss_tensor": None,  # gradients already accumulated via per-rollout backward()
     }
 
 
@@ -296,7 +336,7 @@ def append_sample_logs(step_idx, samples, max_samples=3):
         for i, sample in enumerate(samples[:max_samples]):
             text = sample["text"].replace("\n", "\\n")
             f.write(
-                f"  {i+1}) reward={sample['reward']:.3f} "
+                f"  {i + 1}) reward={sample['reward']:.3f} "
                 f"len={sample['gen_len']}: {text}\n"
             )
         f.write("\n")
@@ -363,7 +403,9 @@ def save_checkpoint(model, checkpoint_dir, step, suffix=""):
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"-{suffix}" if suffix else ""
-    ckpt_path = checkpoint_dir / f"qwen3-0.6B-rlvr-grpo-step{step:05d}{suffix}.pth"
+    ckpt_path = (
+        checkpoint_dir / f"qwen3-0.6B-rlvr-grpo-step{step:05d}{suffix}.pth"
+    )
     torch.save(model.state_dict(), ckpt_path)
     return ckpt_path
 
@@ -398,7 +440,9 @@ def train_rlvr_grpo(
 
     # Use a second GPU for old_model/ref_model if available, to avoid OOM on T4x2
     if offload_device is None:
-        offload_device = torch.device("cuda:1") if torch.cuda.device_count() > 1 else device
+        offload_device = (
+            torch.device("cuda:1") if torch.cuda.device_count() > 1 else device
+        )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     model.train()
@@ -416,6 +460,7 @@ def train_rlvr_grpo(
             stats = None
 
             for _ in range(inner_epochs):
+                optimizer.zero_grad()
                 stats = compute_grpo_loss_plus_format_reward(
                     model=model,
                     old_model=old_model,
@@ -434,15 +479,15 @@ def train_rlvr_grpo(
                     conditional_reward=conditional_reward,
                     skip_zero_adv=skip_zero_advantage_updates,
                 )
-                if stats["loss_tensor"] is not None:
-                    optimizer.zero_grad()
-                    stats["loss_tensor"].backward()
-
+                if not stats["is_zero_adv"]:
+                    # gradients already accumulated inside compute_grpo_loss_plus_format_reward
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
 
             reward_avg = torch.tensor(stats["rewards"]).mean().item()
-            format_reward_avg = torch.tensor(stats["format_rewards"]).mean().item()
+            format_reward_avg = (
+                torch.tensor(stats["format_rewards"]).mean().item()
+            )
             entropy_avg = torch.tensor(stats["entropies"]).mean().item()
             advantage_tensor = torch.tensor(stats["advantages"])
             adv_avg = advantage_tensor.mean().item()
@@ -487,7 +532,9 @@ def train_rlvr_grpo(
                         verbose=False,
                     )
                     eval_acc = acc
-                    append_eval_metrics(current_step, acc, num_correct, num_examples)
+                    append_eval_metrics(
+                        current_step, acc, num_correct, num_examples
+                    )
                     print(
                         f"MATH-500 eval @ step {current_step}: "
                         f"acc={acc:.3f} ({num_correct}/{num_examples})"
@@ -512,7 +559,9 @@ def train_rlvr_grpo(
             )
 
             policy_ratio_str = (
-                "" if policy_ratio is None else f"policy_ratio={policy_ratio:.2f} "
+                ""
+                if policy_ratio is None
+                else f"policy_ratio={policy_ratio:.2f} "
             )
             eta_suffix = ""
             if show_eta:
@@ -554,7 +603,7 @@ def train_rlvr_grpo(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description="Train RLVR GRPO on the MATH dataset."
+        description="Train RLVR GRPO on the MATH dataset.",
     )
     parser.add_argument(
         "--steps",
@@ -669,7 +718,9 @@ if __name__ == "__main__":
             which_model="reasoning", device=device, use_compile=False
         )
 
-    offload_device = torch.device("cuda:1") if torch.cuda.device_count() > 1 else device
+    offload_device = (
+        torch.device("cuda:1") if torch.cuda.device_count() > 1 else device
+    )
 
     if args.kl_coeff:
         ref_model = copy.deepcopy(model).to(offload_device)
@@ -703,8 +754,10 @@ if __name__ == "__main__":
     )
 
     if torch.cuda.is_available():
-        max_mem_gb = torch.cuda.max_memory_allocated() / (1024 ** 3)
+        max_mem_gb = torch.cuda.max_memory_allocated() / (1024**3)
         print(f"Max CUDA memory allocated: {max_mem_gb:.2f} GB")
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    torch.save(trained.state_dict(), CHECKPOINT_DIR/"qwen3-0.6B-rlvr-grpo.pth")
+    torch.save(
+        trained.state_dict(), CHECKPOINT_DIR / "qwen3-0.6B-rlvr-grpo.pth"
+    )
