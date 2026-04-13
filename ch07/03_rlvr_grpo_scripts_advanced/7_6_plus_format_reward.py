@@ -153,6 +153,7 @@ def compute_grpo_loss_plus_format_reward(
     tokenizer,
     example,
     device,
+    offload_device=None,
     num_rollouts=4,
     max_new_tokens=512,
     temperature=0.8,
@@ -167,6 +168,10 @@ def compute_grpo_loss_plus_format_reward(
         raise ValueError("ref_model must be provided when kl_coeff is non-zero.")
     if old_model is None:
         old_model = model
+    # old_model and ref_model may be on a different device (e.g. cuda:1) to save GPU 0 memory
+    old_device = next(old_model.parameters()).device if old_model is not model else device
+    if offload_device is None:
+        offload_device = old_device
     roll_old_logps, roll_ref_logps, roll_rewards, roll_format_rewards, roll_entropies, samples = [], [], [], [], [], []
     roll_token_ids, roll_prompt_lens = [], []
     prompt = render_prompt(example["problem"])
@@ -180,7 +185,7 @@ def compute_grpo_loss_plus_format_reward(
             model=old_model,
             tokenizer=tokenizer,
             prompt=prompt,
-            device=device,
+            device=old_device,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -188,7 +193,7 @@ def compute_grpo_loss_plus_format_reward(
         with torch.no_grad():
             old_logp, entropy = sequence_logprob_and_entropy(old_model, token_ids, prompt_len)
             if kl_coeff:
-                ref_logp = sequence_logprob(ref_model, token_ids, prompt_len)
+                ref_logp = sequence_logprob(ref_model, token_ids.to(offload_device), prompt_len)
             else:
                 ref_logp = None
         rlvr_reward = reward_rlvr(text, example["answer"])
@@ -244,11 +249,11 @@ def compute_grpo_loss_plus_format_reward(
 
     new_logps = []
     for token_ids, prompt_len in zip(roll_token_ids, roll_prompt_lens):
-        new_logp = sequence_logprob(model, token_ids, prompt_len)
+        new_logp = sequence_logprob(model, token_ids.to(device), prompt_len)
         new_logps.append(new_logp)
     new_logps = torch.stack(new_logps)
 
-    old_logps = torch.stack(roll_old_logps).detach()
+    old_logps = torch.stack(roll_old_logps).detach().to(device)
     log_ratio = new_logps - old_logps
     ratio = torch.exp(log_ratio)
     clipped_ratio = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps)
@@ -263,7 +268,7 @@ def compute_grpo_loss_plus_format_reward(
 
     pg_loss = -obj.mean()
     if kl_coeff:
-        ref_logps = torch.stack(roll_ref_logps).detach()
+        ref_logps = torch.stack(roll_ref_logps).detach().to(device)
         kl_loss = kl_coeff * torch.mean(new_logps - ref_logps)
     else:
         kl_loss = torch.tensor(0.0, device=new_logps.device)
@@ -370,6 +375,7 @@ def train_rlvr_grpo(
     math_data,
     math500_eval_data,
     device,
+    offload_device=None,
     steps=None,
     num_rollouts=9,
     max_new_tokens=512,
@@ -390,6 +396,10 @@ def train_rlvr_grpo(
     if steps is None:
         steps = len(math_data)
 
+    # Use a second GPU for old_model/ref_model if available, to avoid OOM on T4x2
+    if offload_device is None:
+        offload_device = torch.device("cuda:1") if torch.cuda.device_count() > 1 else device
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     model.train()
     current_step = 0
@@ -399,7 +409,7 @@ def train_rlvr_grpo(
             step_start = time.perf_counter()
             current_step = step + 1
             example = math_data[step % len(math_data)]
-            old_model = copy.deepcopy(model).to(device)
+            old_model = copy.deepcopy(model).to(offload_device)
             old_model.eval()
             for p in old_model.parameters():
                 p.requires_grad = False
@@ -413,6 +423,7 @@ def train_rlvr_grpo(
                     tokenizer=tokenizer,
                     example=example,
                     device=device,
+                    offload_device=offload_device,
                     num_rollouts=num_rollouts,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
@@ -658,8 +669,10 @@ if __name__ == "__main__":
             which_model="reasoning", device=device, use_compile=False
         )
 
+    offload_device = torch.device("cuda:1") if torch.cuda.device_count() > 1 else device
+
     if args.kl_coeff:
-        ref_model = copy.deepcopy(model).to(device)
+        ref_model = copy.deepcopy(model).to(offload_device)
         ref_model.eval()
         for p in ref_model.parameters():
             p.requires_grad = False
@@ -673,6 +686,7 @@ if __name__ == "__main__":
         math_data=math_data,
         math500_eval_data=load_math500_test(),
         device=device,
+        offload_device=offload_device,
         steps=args.steps,
         num_rollouts=args.num_rollouts,
         max_new_tokens=args.max_new_tokens,
