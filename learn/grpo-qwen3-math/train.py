@@ -20,6 +20,17 @@ from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
 
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+try:
+    from google.colab import userdata
+    for key in ("WANDB_API_KEY", "HF_TOKEN"):
+        if not os.environ.get(key):
+            os.environ[key] = userdata.get(key)
+except Exception:
+    if not os.environ.get("WANDB_API_KEY"):
+        os.environ["WANDB_API_KEY"] = os.environ.get("wandb_apikey", "")
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 HERE = Path(__file__).parent
@@ -116,13 +127,6 @@ def reward_format(prompts, completions, **kwargs):
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
-if not os.environ.get("WANDB_API_KEY"):
-    try:
-        from google.colab import userdata
-        os.environ["WANDB_API_KEY"] = userdata.get("WANDB_API_KEY")
-    except Exception:
-        os.environ["WANDB_API_KEY"] = os.environ.get("wandb_apikey", "")
-
 wandb.init(
     project="grpo-qwen3-math",
     config={
@@ -174,5 +178,14 @@ trainer = GRPOTrainer(
 trainer.train()
 trainer.save_model(str(OUTPUT_DIR / "final"))
 print(f"Model saved to {OUTPUT_DIR / 'final'}")
+
+if os.environ.get("HF_TOKEN"):
+    from huggingface_hub import whoami
+    username = whoami()["name"]
+    repo_id = f"{username}/grpo-qwen3-math"
+    trainer.push_to_hub(repo_id)
+    print(f"Model pushed to hub: {repo_id}")
+else:
+    print("HF_TOKEN not set — skipping push to hub.")
 
 wandb.finish()
