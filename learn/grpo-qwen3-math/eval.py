@@ -38,6 +38,14 @@ print(f"device: {device}, dtype: {dtype}")
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
+EVAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+if not EVAL_PATH.exists():
+    print("Downloading math500_test.json ...")
+    url = "https://raw.githubusercontent.com/rasbt/reasoning-from-scratch/main/ch03/01_main-chapter-code/math500_test.json"
+    import urllib.request
+    urllib.request.urlretrieve(url, str(EVAL_PATH))
+    print(f"Saved to {EVAL_PATH}")
+
 with open(EVAL_PATH) as f:
     data = json.load(f)
 

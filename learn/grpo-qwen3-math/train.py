@@ -43,6 +43,7 @@ if is_cuda:
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
+TRAIN_PATH.parent.mkdir(parents=True, exist_ok=True)
 if not TRAIN_PATH.exists():
     print("Downloading math_train.json ...")
     url = "https://raw.githubusercontent.com/rasbt/math_full_minus_math500/refs/heads/main/math_full_minus_math500.json"
