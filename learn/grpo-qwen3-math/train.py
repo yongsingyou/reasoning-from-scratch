@@ -26,16 +26,15 @@ from trl import GRPOConfig, GRPOTrainer
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
+from huggingface_hub import login
+
 try:
     from google.colab import userdata
     os.environ["WANDB_API_KEY"] = userdata.get("WANDB_API_KEY")
-    os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
+    hf_token = userdata.get("HF_TOKEN")
+    login(hf_token)
 except Exception:
     pass
-
-if os.environ.get("HF_TOKEN"):
-    from huggingface_hub import login
-    login(token=os.environ["HF_TOKEN"], add_to_git_credential=False)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
