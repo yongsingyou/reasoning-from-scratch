@@ -194,3 +194,9 @@ else:
     print("HF_TOKEN not set — skipping push to hub.")
 
 wandb.finish()
+
+try:
+    from google.colab import runtime
+    runtime.unassign()
+except Exception:
+    pass
