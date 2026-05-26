@@ -77,7 +77,11 @@ print(f"Loaded adapter from {ADAPTER_DIR}")
 # ── Eval ──────────────────────────────────────────────────────────────────────
 
 if not os.environ.get("WANDB_API_KEY"):
-    os.environ["WANDB_API_KEY"] = os.environ.get("wandb_apikey", "")
+    try:
+        from google.colab import userdata
+        os.environ["WANDB_API_KEY"] = userdata.get("WANDB_API_KEY")
+    except Exception:
+        os.environ["WANDB_API_KEY"] = os.environ.get("wandb_apikey", "")
 
 wandb.init(
     project="grpo-qwen3-math",
