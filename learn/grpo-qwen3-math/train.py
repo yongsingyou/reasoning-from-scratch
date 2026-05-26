@@ -33,6 +33,10 @@ try:
 except Exception:
     pass
 
+if os.environ.get("HF_TOKEN"):
+    from huggingface_hub import login
+    login(token=os.environ["HF_TOKEN"], add_to_git_credential=False)
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 HERE = Path(__file__).parent
