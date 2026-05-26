@@ -1,3 +1,12 @@
+import subprocess
+import sys
+
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "uv"])
+subprocess.check_call(["uv", "pip", "install", "--system", "-q",
+    "trl", "transformers", "accelerate", "peft", "datasets", "wandb",
+    "torchao>=0.16.0",
+])
+
 import json
 import os
 import re
