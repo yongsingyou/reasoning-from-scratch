@@ -27,7 +27,7 @@ print(output["generated_text"])
 
 ## Training procedure
 
-[<img src="https://raw.githubusercontent.com/wandb/assets/main/wandb-github-badge-28.svg" alt="Visualize in Weights & Biases" width="150" height="24"/>](https://wandb.ai/asliman/grpo-qwen3-math/runs/4e6uo9qp) 
+[<img src="https://raw.githubusercontent.com/wandb/assets/main/wandb-github-badge-28.svg" alt="Visualize in Weights & Biases" width="150" height="24"/>](https://wandb.ai/asliman/grpo-qwen3-math/runs/ock9k7lt) 
 
 
 
