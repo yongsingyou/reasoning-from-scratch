@@ -1,11 +1,15 @@
 import subprocess
 import sys
 
-subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "uv"])
-subprocess.check_call(["uv", "pip", "install", "--system", "-q",
-    "trl", "transformers", "accelerate", "peft", "datasets", "wandb",
-    "torchao>=0.16.0",
-])
+try:
+    import google.colab  # only runs on Colab
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "uv"])
+    subprocess.check_call(["uv", "pip", "install", "--system", "-q",
+        "trl", "transformers", "accelerate", "peft", "datasets", "wandb",
+        "torchao>=0.16.0",
+    ])
+except ImportError:
+    pass  # local: dependencies already installed
 
 import json
 import os
@@ -24,12 +28,10 @@ from trl import GRPOConfig, GRPOTrainer
 
 try:
     from google.colab import userdata
-    for key in ("WANDB_API_KEY", "HF_TOKEN"):
-        if not os.environ.get(key):
-            os.environ[key] = userdata.get(key)
+    os.environ["WANDB_API_KEY"] = userdata.get("WANDB_API_KEY")
+    os.environ["HF_TOKEN"] = userdata.get("HF_TOKEN")
 except Exception:
-    if not os.environ.get("WANDB_API_KEY"):
-        os.environ["WANDB_API_KEY"] = os.environ.get("wandb_apikey", "")
+    pass
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
