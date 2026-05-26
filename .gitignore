@@ -1,3 +1,10 @@
+# wandb
+wandb/
+
+# Training output
+checkpoint-*/
+final/
+
 # Plotting
 *.pdf
 *.png
