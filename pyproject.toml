@@ -29,6 +29,14 @@ dependencies = [
     "nbformat>=5.10.4",
     "sympy>=1.14.0", # For verifier in ch03
     "matplotlib>=3.10.7",
+    "wandb>=0.27.0",
+    "datasets>=4.8.5",
+    "math-verify>=0.9.0",
+    "peft>=0.19.1",
+    "trl>=1.5.0",
+    "transformers>=5.9.0",
+    "accelerate>=1.13.0",
+    "torchao>=0.17.0",
 ]
 
 classifiers = [

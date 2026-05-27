@@ -6,14 +6,13 @@ try:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "uv"])
     subprocess.check_call(["uv", "pip", "install", "--system", "-q",
         "trl", "transformers", "accelerate", "peft", "datasets", "wandb",
-        "torchao>=0.16.0",
+        "torchao>=0.16.0", "math-verify",
     ])
 except ImportError:
     pass  # local: dependencies already installed
 
 import json
 import os
-import re
 import urllib.request
 from pathlib import Path
 
@@ -23,6 +22,8 @@ from datasets import Dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
+
+from reward_utils import reward_correctness, reward_format
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 
@@ -105,30 +106,6 @@ else:
     model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=dtype).to(device)
 
 print(f"Model on {device}: {sum(p.numel() for p in model.parameters()) / 1e6:.0f}M params")
-
-# ── Rewards ───────────────────────────────────────────────────────────────────
-
-def extract_boxed(text):
-    matches = re.findall(r"\\boxed\{([^}]*)\}", text)
-    return matches[-1].strip() if matches else None
-
-
-def reward_correctness(prompts, completions, answer, **kwargs):
-    scores = []
-    for completion, gt in zip(completions, answer):
-        text = completion[0]["content"] if isinstance(completion, list) else completion
-        extracted = extract_boxed(text)
-        scores.append(1.0 if extracted is not None and extracted == gt.strip() else 0.0)
-    return scores
-
-
-def reward_format(prompts, completions, **kwargs):
-    scores = []
-    for completion in completions:
-        text = completion[0]["content"] if isinstance(completion, list) else completion
-        has_think = bool(re.search(r"<think>.*?</think>", text, re.DOTALL))
-        scores.append(0.5 if has_think else 0.0)
-    return scores
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
